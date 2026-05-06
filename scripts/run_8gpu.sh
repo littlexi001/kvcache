@@ -14,6 +14,8 @@ torchrun --nproc_per_node=8 src/train_qwen3_chunk_sparse.py \
   --model_name_or_path "${MODEL_PATH}" \
   --dataset_path "${DATA_PATH}" \
   --output_dir "${OUT_DIR}" \
+  --init_from_scratch true \
+  --data_mode "${DATA_MODE:-dclm}" \
   --mode "${MODE}" \
   --seq_length 4096 \
   --num_chunks 20 \

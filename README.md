@@ -17,6 +17,10 @@ MODEL=/mnt/workspace/lym_code/models/Qwen3-0.6B
 DATA=/mnt/workspace/dclm
 ```
 
+By default, the scripts initialize the Qwen3-0.6B architecture from random
+weights. The tokenizer and model config are still read from `MODEL`, but the
+model parameters are not loaded from the checkpoint.
+
 ## Run on 8 GPUs
 
 Baseline:
@@ -38,6 +42,35 @@ bash scripts/run_8gpu.sh router
 ```
 
 The scripts use `torchrun --nproc_per_node=8` and `CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7`.
+
+## Run with nohup
+
+Start a background training job:
+
+```bash
+bash scripts/nohup_run_8gpu.sh oracle
+```
+
+Watch the log:
+
+```bash
+tail -f logs/oracle_*.log
+```
+
+Use TensorBoard:
+
+```bash
+tensorboard --logdir ./outputs/qwen3_oracle/tensorboard --host 0.0.0.0 --port 6006
+```
+
+## Random Token Data
+
+The default data mode uses `/mnt/workspace/dclm`. To train on synthetic random
+token data instead:
+
+```bash
+DATA_MODE=random_tokens bash scripts/nohup_run_8gpu.sh router
+```
 
 ## Recommended Order
 

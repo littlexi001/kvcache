@@ -4,11 +4,12 @@ import argparse
 from pathlib import Path
 
 import torch
-from datasets import Dataset, DatasetDict, IterableDataset, load_dataset, load_from_disk
+from torch.utils.data import Dataset as TorchDataset
+from datasets import DatasetDict, load_dataset, load_from_disk
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
-    DataCollatorForLanguageModeling,
     Trainer,
     TrainingArguments,
 )
@@ -21,6 +22,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_name_or_path", required=True)
     parser.add_argument("--dataset_path", required=True)
     parser.add_argument("--output_dir", required=True)
+    parser.add_argument("--init_from_scratch", type=lambda x: str(x).lower() == "true", default=True)
+    parser.add_argument("--data_mode", choices=["dclm", "random_tokens"], default="dclm")
+    parser.add_argument("--random_dataset_size", type=int, default=100000)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--mode", choices=["baseline", "oracle", "router"], default="oracle")
     parser.add_argument("--seq_length", type=int, default=4096)
     parser.add_argument("--num_chunks", type=int, default=20)
@@ -37,6 +42,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bf16", type=lambda x: str(x).lower() == "true", default=True)
     parser.add_argument("--gradient_checkpointing", type=lambda x: str(x).lower() == "true", default=True)
     return parser.parse_args()
+
+
+class RandomTokenDataset(TorchDataset):
+    def __init__(self, size: int, seq_length: int, vocab_size: int, seed: int) -> None:
+        self.size = size
+        self.seq_length = seq_length
+        self.vocab_size = vocab_size
+        self.seed = seed
+
+    def __len__(self) -> int:
+        return self.size
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + idx)
+        input_ids = torch.randint(
+            low=0,
+            high=self.vocab_size,
+            size=(self.seq_length,),
+            generator=generator,
+            dtype=torch.long,
+        )
+        return {"input_ids": input_ids, "labels": input_ids.clone()}
 
 
 def load_text_dataset(path: str):
@@ -98,20 +126,40 @@ def tokenize_and_group(dataset, tokenizer, seq_length: int):
     return tokenized.map(group_texts, batched=True, desc="Grouping")
 
 
+def causal_lm_collator(features: list[dict]) -> dict[str, torch.Tensor]:
+    batch = {}
+    for key in ["input_ids", "labels"]:
+        values = [item[key] for item in features]
+        values = [
+            value if isinstance(value, torch.Tensor) else torch.tensor(value, dtype=torch.long)
+            for value in values
+        ]
+        batch[key] = torch.stack(values)
+    return batch
+
+
 def main() -> None:
     args = parse_args()
     torch.backends.cuda.matmul.allow_tf32 = True
+    torch.manual_seed(args.seed)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_name_or_path,
-        trust_remote_code=True,
-        torch_dtype=torch.bfloat16 if args.bf16 else torch.float16,
-        attn_implementation="eager",
-    )
+    dtype = torch.bfloat16 if args.bf16 else torch.float16
+    if args.init_from_scratch:
+        config = AutoConfig.from_pretrained(args.model_name_or_path, trust_remote_code=True)
+        config._attn_implementation = "eager"
+        model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+        model.to(dtype=dtype)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name_or_path,
+            trust_remote_code=True,
+            torch_dtype=dtype,
+            attn_implementation="eager",
+        )
 
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
@@ -126,8 +174,16 @@ def main() -> None:
     )
     patch_qwen3_chunk_attention(model, sparse_cfg)
 
-    dataset = load_text_dataset(args.dataset_path)
-    train_dataset = tokenize_and_group(dataset, tokenizer, args.seq_length)
+    if args.data_mode == "random_tokens":
+        train_dataset = RandomTokenDataset(
+            size=args.random_dataset_size,
+            seq_length=args.seq_length,
+            vocab_size=len(tokenizer),
+            seed=args.seed,
+        )
+    else:
+        dataset = load_text_dataset(args.dataset_path)
+        train_dataset = tokenize_and_group(dataset, tokenizer, args.seq_length)
 
     training_args = TrainingArguments(
         output_dir=args.output_dir,
@@ -141,17 +197,19 @@ def main() -> None:
         bf16=args.bf16,
         fp16=not args.bf16,
         ddp_find_unused_parameters=False,
-        report_to="none",
+        report_to=["tensorboard"],
+        logging_dir=str(Path(args.output_dir) / "tensorboard"),
         save_total_limit=2,
         remove_unused_columns=False,
+        seed=args.seed,
+        data_seed=args.seed,
     )
 
-    collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        data_collator=collator,
+        data_collator=causal_lm_collator,
     )
     trainer.train()
     trainer.save_model(args.output_dir)
