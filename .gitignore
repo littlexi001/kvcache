@@ -3,3 +3,7 @@ __pycache__/
 outputs/
 logs/
 runs/
+projects/*/outputs/
+projects/*/logs/
+projects/**/__pycache__/
+.gitpush_tmp/

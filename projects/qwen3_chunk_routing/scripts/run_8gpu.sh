@@ -3,14 +3,17 @@ set -euo pipefail
 
 MODE="${1:-oracle}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export TOKENIZERS_PARALLELISM=false
 
 MODEL_PATH="${MODEL_PATH:-/mnt/workspace/lym_code/models/Qwen3-0.6B}"
 DATA_PATH="${DATA_PATH:-/mnt/workspace/dclm}"
-OUT_DIR="${OUT_DIR:-./outputs/qwen3_${MODE}}"
+OUT_DIR="${OUT_DIR:-${PROJECT_DIR}/outputs/qwen3_${MODE}}"
 
-torchrun --nproc_per_node=8 src/train_qwen3_chunk_sparse.py \
+torchrun --nproc_per_node=8 "${PROJECT_DIR}/src/train_qwen3_chunk_sparse.py" \
   --model_name_or_path "${MODEL_PATH}" \
   --dataset_path "${DATA_PATH}" \
   --output_dir "${OUT_DIR}" \
