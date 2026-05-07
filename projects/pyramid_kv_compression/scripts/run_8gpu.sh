@@ -13,6 +13,8 @@ MODEL_PATH="${MODEL_PATH:-/mnt/workspace/lym_code/models/Qwen3-0.6B}"
 DATA_PATH="${DATA_PATH:-/mnt/workspace/dclm}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
 SEQ_LENGTH="${SEQ_LENGTH:-4096}"
+MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+MASTER_PORT="${MASTER_PORT:-$((20000 + RANDOM % 40000))}"
 
 case "${STAGE}" in
   sanity)
@@ -84,6 +86,9 @@ if [[ -n "${LAYER_BLOCK_SIZES:-}" ]]; then
   ARGS+=(--layer_block_sizes "${LAYER_BLOCK_SIZES}")
 fi
 
-torchrun --nproc_per_node="${NPROC_PER_NODE}" \
+torchrun \
+  --nproc_per_node="${NPROC_PER_NODE}" \
+  --master_addr="${MASTER_ADDR}" \
+  --master_port="${MASTER_PORT}" \
   "${PROJECT_DIR}/src/train_qwen3_pyramid_kv.py" \
   "${ARGS[@]}"

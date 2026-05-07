@@ -5,6 +5,8 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import Dataset as TorchDataset
+from torch.utils.data import IterableDataset as TorchIterableDataset
+from torch.utils.data import get_worker_info
 from datasets import DatasetDict, load_dataset, load_from_disk
 from transformers import (
     AutoConfig,
@@ -24,6 +26,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--init_from_scratch", type=lambda x: str(x).lower() == "true", default=True)
     parser.add_argument("--data_mode", choices=["dclm", "random_tokens"], default="dclm")
+    parser.add_argument("--streaming", type=lambda x: str(x).lower() == "true", default=True)
+    parser.add_argument("--dataset_format", choices=["auto", "parquet", "json", "text"], default="auto")
+    parser.add_argument("--data_files_glob", default=None)
     parser.add_argument("--random_dataset_size", type=int, default=100000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--mode", choices=["baseline", "oracle", "router"], default="oracle")
@@ -67,19 +72,113 @@ class RandomTokenDataset(TorchDataset):
         return {"input_ids": input_ids, "labels": input_ids.clone()}
 
 
-def load_text_dataset(path: str):
+class StreamingTokenBlockDataset(TorchIterableDataset):
+    def __init__(
+        self,
+        dataset_path: str,
+        tokenizer,
+        seq_length: int,
+        dataset_format: str,
+        data_files_glob: str | None,
+    ) -> None:
+        self.dataset_path = dataset_path
+        self.tokenizer = tokenizer
+        self.seq_length = seq_length
+        self.dataset_format = dataset_format
+        self.data_files_glob = data_files_glob
+
+    def _resolve_files(self) -> tuple[str, str]:
+        p = Path(self.dataset_path)
+        patterns = [self.data_files_glob] if self.data_files_glob else []
+        if not patterns:
+            if self.dataset_format in ["auto", "parquet"]:
+                patterns.append("**/*.parquet")
+            if self.dataset_format in ["auto", "json"]:
+                patterns.extend(["**/*.jsonl", "**/*.json"])
+            if self.dataset_format in ["auto", "text"]:
+                patterns.append("**/*.txt")
+
+        selected_format = None
+        for pattern in patterns:
+            first_match = next(p.glob(pattern), None)
+            if first_match is None:
+                continue
+            suffix = first_match.suffix.lower()
+            if self.dataset_format != "auto":
+                selected_format = self.dataset_format
+            elif suffix == ".parquet":
+                selected_format = "parquet"
+            elif suffix in [".json", ".jsonl"]:
+                selected_format = "json"
+            else:
+                selected_format = "text"
+            data_files = str(p / pattern)
+            break
+
+        if selected_format is None:
+            raise FileNotFoundError(f"No loadable dataset files found under {self.dataset_path}")
+        return selected_format, data_files
+
+    def _iter_records(self):
+        dataset_format, files = self._resolve_files()
+        dataset = load_dataset(
+            dataset_format,
+            data_files=files,
+            split="train",
+            streaming=True,
+        )
+
+        rank = 0
+        world_size = 1
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            rank = torch.distributed.get_rank()
+            world_size = torch.distributed.get_world_size()
+
+        worker = get_worker_info()
+        worker_id = worker.id if worker is not None else 0
+        num_workers = worker.num_workers if worker is not None else 1
+        shard_id = rank * num_workers + worker_id
+        num_shards = world_size * num_workers
+
+        for idx, example in enumerate(dataset):
+            if idx % num_shards != shard_id:
+                continue
+            yield example
+
+    def __iter__(self):
+        buffer: list[int] = []
+        text_col = None
+        for example in self._iter_records():
+            if text_col is None:
+                text_col = pick_text_column_from_names(example.keys())
+            text = example.get(text_col)
+            if text is None:
+                continue
+            buffer.extend(self.tokenizer(str(text), add_special_tokens=False)["input_ids"])
+            while len(buffer) >= self.seq_length:
+                input_ids = torch.tensor(buffer[: self.seq_length], dtype=torch.long)
+                del buffer[: self.seq_length]
+                yield {"input_ids": input_ids, "labels": input_ids.clone()}
+
+
+def load_text_dataset(path: str, dataset_format: str, data_files_glob: str | None):
     p = Path(path)
     if (p / "dataset_info.json").exists() or (p / "state.json").exists():
         ds = load_from_disk(path)
     else:
-        parquet_files = list(p.rglob("*.parquet"))
-        json_files = list(p.rglob("*.jsonl")) + list(p.rglob("*.json"))
-        txt_files = list(p.rglob("*.txt"))
-        if parquet_files:
+        if data_files_glob:
+            files = [str(path) for path in p.glob(data_files_glob)]
+            if not files:
+                raise FileNotFoundError(f"No files matched {data_files_glob} under {path}")
+            fmt = dataset_format if dataset_format != "auto" else infer_dataset_format(files[0])
+            ds = load_dataset(fmt, data_files=files, split="train")
+        elif dataset_format in ["auto", "parquet"] and (parquet_files := list(p.rglob("*.parquet"))):
             ds = load_dataset("parquet", data_files=[str(x) for x in parquet_files], split="train")
-        elif json_files:
+        elif dataset_format in ["auto", "json"] and (
+            json_files := list(p.rglob("*.jsonl")) + list(p.rglob("*.json"))
+        ):
             ds = load_dataset("json", data_files=[str(x) for x in json_files], split="train")
-        elif txt_files:
+        elif dataset_format in ["auto", "text"] and (txt_files := list(p.rglob("*.txt"))):
             ds = load_dataset("text", data_files=[str(x) for x in txt_files], split="train")
         else:
             raise FileNotFoundError(f"No loadable dataset files found under {path}")
@@ -89,14 +188,27 @@ def load_text_dataset(path: str):
     return ds
 
 
-def pick_text_column(dataset) -> str:
-    columns = dataset.column_names
+def infer_dataset_format(file_name: str) -> str:
+    suffix = Path(file_name).suffix.lower()
+    if suffix == ".parquet":
+        return "parquet"
+    if suffix in [".json", ".jsonl"]:
+        return "json"
+    return "text"
+
+
+def pick_text_column_from_names(columns) -> str:
+    columns = list(columns)
     for name in ["text", "content", "document", "raw_content"]:
         if name in columns:
             return name
-    for name in columns:
-        return name
+    if columns:
+        return columns[0]
     raise ValueError("Dataset has no columns")
+
+
+def pick_text_column(dataset) -> str:
+    return pick_text_column_from_names(dataset.column_names)
 
 
 def tokenize_and_group(dataset, tokenizer, seq_length: int):
@@ -182,8 +294,21 @@ def main() -> None:
             seed=args.seed,
         )
     else:
-        dataset = load_text_dataset(args.dataset_path)
-        train_dataset = tokenize_and_group(dataset, tokenizer, args.seq_length)
+        if args.streaming:
+            train_dataset = StreamingTokenBlockDataset(
+                dataset_path=args.dataset_path,
+                tokenizer=tokenizer,
+                seq_length=args.seq_length,
+                dataset_format=args.dataset_format,
+                data_files_glob=args.data_files_glob,
+            )
+        else:
+            dataset = load_text_dataset(
+                args.dataset_path,
+                dataset_format=args.dataset_format,
+                data_files_glob=args.data_files_glob,
+            )
+            train_dataset = tokenize_and_group(dataset, tokenizer, args.seq_length)
 
     training_args = TrainingArguments(
         output_dir=args.output_dir,

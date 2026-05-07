@@ -42,6 +42,9 @@ bash projects/qwen3_chunk_routing/scripts/run_8gpu.sh router
 ```
 
 The scripts use `torchrun --nproc_per_node=8` and `CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7`.
+For DCLM, they use Hugging Face streaming by default, so the loader does not
+materialize a huge Arrow cache before training. Because streaming datasets do
+not have a fixed length, the script defaults to `MAX_STEPS=10000`.
 
 ## Run with nohup
 
@@ -70,6 +73,21 @@ token data instead:
 
 ```bash
 DATA_MODE=random_tokens bash projects/qwen3_chunk_routing/scripts/nohup_run_8gpu.sh router
+```
+
+## DCLM Streaming Controls
+
+If auto-detection scans too much of the DCLM tree, pass a narrower glob:
+
+```bash
+DATA_FILES_GLOB="**/*.jsonl" bash projects/qwen3_chunk_routing/scripts/nohup_run_8gpu.sh oracle
+```
+
+For a fixed-size Arrow cache build, disable streaming explicitly. This is not
+recommended for the full DCLM directory because it can fill the disk:
+
+```bash
+STREAMING=false bash projects/qwen3_chunk_routing/scripts/nohup_run_8gpu.sh oracle
 ```
 
 ## Recommended Order
