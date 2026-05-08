@@ -26,21 +26,21 @@ case "${STAGE}" in
     ;;
   compressor)
     DATA_MODE="${DATA_MODE:-dclm}"
-    MAX_STEPS="${MAX_STEPS:--1}"
+    MAX_STEPS="${MAX_STEPS:-10000}"
     TRAINABLE_SCOPE="${TRAINABLE_SCOPE:-compressor}"
     LR="${LR:-2e-4}"
     OUT_DIR="${OUT_DIR:-${PROJECT_DIR}/outputs/compressor}"
     ;;
   attention)
     DATA_MODE="${DATA_MODE:-dclm}"
-    MAX_STEPS="${MAX_STEPS:--1}"
+    MAX_STEPS="${MAX_STEPS:-10000}"
     TRAINABLE_SCOPE="${TRAINABLE_SCOPE:-compressor_and_attention}"
     LR="${LR:-5e-5}"
     OUT_DIR="${OUT_DIR:-${PROJECT_DIR}/outputs/attention}"
     ;;
   full)
     DATA_MODE="${DATA_MODE:-dclm}"
-    MAX_STEPS="${MAX_STEPS:--1}"
+    MAX_STEPS="${MAX_STEPS:-10000}"
     TRAINABLE_SCOPE="${TRAINABLE_SCOPE:-all}"
     LR="${LR:-1e-5}"
     OUT_DIR="${OUT_DIR:-${PROJECT_DIR}/outputs/full}"
@@ -58,6 +58,9 @@ ARGS=(
   --output_dir "${OUT_DIR}"
   --init_from_scratch false
   --data_mode "${DATA_MODE}"
+  --streaming "${STREAMING:-true}"
+  --dataset_format "${DATASET_FORMAT:-auto}"
+  --data_files_glob "${DATA_FILES_GLOB:-}"
   --seq_length "${SEQ_LENGTH}"
   --first_full_layers "${FIRST_FULL_LAYERS:-4}"
   --last_full_layers "${LAST_FULL_LAYERS:-4}"

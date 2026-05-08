@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save_steps", type=int, default=500)
     parser.add_argument("--bf16", type=lambda x: str(x).lower() == "true", default=True)
     parser.add_argument("--gradient_checkpointing", type=lambda x: str(x).lower() == "true", default=True)
+    parser.add_argument("--ddp_find_unused_parameters", type=lambda x: str(x).lower() == "true", default=True)
     return parser.parse_args()
 
 
@@ -321,7 +322,7 @@ def main() -> None:
         save_steps=args.save_steps,
         bf16=args.bf16,
         fp16=not args.bf16,
-        ddp_find_unused_parameters=False,
+        ddp_find_unused_parameters=args.ddp_find_unused_parameters,
         report_to=["tensorboard"],
         logging_dir=str(Path(args.output_dir) / "tensorboard"),
         save_total_limit=2,

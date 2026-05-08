@@ -41,6 +41,10 @@ bash projects/pyramid_kv_compression/scripts/run_8gpu.sh sanity
 bash projects/pyramid_kv_compression/scripts/run_8gpu.sh compressor
 ```
 
+For large DCLM-style directories, streaming is enabled by default. This avoids
+building a huge Arrow cache before training. Streaming datasets do not have a
+fixed length, so real-data stages default to `MAX_STEPS=10000`.
+
 3. Unfreeze attention plus compressors:
 
 ```bash
@@ -77,6 +81,9 @@ RECENT_TOKENS=512
 FIRST_FULL_LAYERS=4
 LAST_FULL_LAYERS=4
 SEQ_LENGTH=4096
+STREAMING=true
+DATASET_FORMAT=auto
+DATA_FILES_GLOB="**/*.parquet"
 ```
 
 For exact manual layer control, pass a comma-separated block-size list:

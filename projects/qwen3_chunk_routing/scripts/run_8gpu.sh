@@ -29,15 +29,16 @@ torchrun \
   --dataset_format "${DATASET_FORMAT:-auto}" \
   --data_files_glob "${DATA_FILES_GLOB:-}" \
   --mode "${MODE}" \
-  --seq_length 4096 \
+  --seq_length "${SEQ_LENGTH:-1024}" \
   --num_chunks 20 \
   --keep_middle 3 \
   --per_device_train_batch_size 1 \
-  --gradient_accumulation_steps 8 \
+  --gradient_accumulation_steps "${GRAD_ACC:-32}" \
   --learning_rate 2e-5 \
   --num_train_epochs 1 \
   --max_steps "${MAX_STEPS:-10000}" \
   --bf16 true \
   --gradient_checkpointing true \
+  --ddp_find_unused_parameters "${DDP_FIND_UNUSED_PARAMETERS:-true}" \
   --logging_steps 10 \
   --save_steps 500
