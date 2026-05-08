@@ -62,6 +62,21 @@ MAX_FILES=4 MAX_SEQUENCES=8 SEQ_LENGTH=256 \
 bash projects/qwen3_kcache_avg_topk/scripts/run_eval.sh
 ```
 
+Run evaluation in the background with `nohup`:
+
+```bash
+MODEL_PATH=/mnt/workspace/lym_code/models/Qwen3-0.6B \
+DATA_PATH=/mnt/workspace/dclm/global-shard_01_of_10/local-shard_0_of_10 \
+bash projects/qwen3_kcache_avg_topk/scripts/nohup_run_eval.sh
+```
+
+Check the process and watch the log:
+
+```bash
+cat projects/qwen3_kcache_avg_topk/logs/eval.pid
+tail -f projects/qwen3_kcache_avg_topk/logs/eval_*.log
+```
+
 ## Notes
 
 - This is an inference experiment and does not train new parameters.
